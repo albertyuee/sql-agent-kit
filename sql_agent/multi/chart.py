@@ -145,7 +145,8 @@ def _should_show_label(df) -> bool:
 
 
 def _llm_chart_decision(df, intent: str, settings: dict,
-                       log: list | None = None) -> dict | None:
+                       log: list | None = None,
+                       question: str = "") -> dict | None:
     """调用 LLM 决策图表类型、轴映射和标题。成功返回 dict，失败返回 None 并写 log。"""
     import json
     import re
@@ -189,21 +190,25 @@ def _llm_chart_decision(df, intent: str, settings: dict,
         "- dual_axis: 双 Y 轴，同时展示量和率（如销售额 + 转化率）\n"
         "- table: 数据不适合图表展示（列数过多/无有意义的图表映射）\n\n"
         "要求：\n"
-        "1. x_col / y_col 必须是 DataFrame 中真实存在的列名，不能编造\n"
-        "2. color_col 是可选的，仅当有自然分组维度时填写，否则填 null\n"
-        "3. title / x_label / y_label 用中文\n"
-        "4. 只输出 JSON，不要任何解释\n\n"
+        '1. 仔细阅读\u201c用户原始问题\u201d，用户的图表类型偏好、要展示的指标、特殊标注需求（如参考线）都必须尊重\n'
+        "2. x_col / y_col 必须是 DataFrame 中真实存在的列名，不能编造\n"
+        "3. color_col 是可选的，仅当有自然分组维度时填写，否则填 null\n"
+        "4. title / x_label / y_label 用中文\n"
+        "5. 如果数据中有多个相关数值列（比如同时有花费、收入、ROI），优先考虑 bar_stack 或 dual_axis 来全面展示\n"
+        "6. 只输出 JSON，不要任何解释\n\n"
         '输出格式：\n'
         '{"chart_type": "bar", "x_col": "类别", "y_col": "销售额", "color_col": null, "title": "各类别销售额对比", "x_label": "类别", "y_label": "销售额（元）"}'
     )
 
-    user_content = (
-        f"分析意图：{intent}\n\n"
-        f"DataFrame 列信息：\n{chr(10).join(col_lines)}\n\n"
-        f"数据预览（前 3 行）：\n{head_text}\n\n"
-        f"统计摘要：\n{stats_text}\n\n"
-        "请输出图表配置 JSON："
-    )
+    user_parts = []
+    if question and question != intent:
+        user_parts.append(f"用户原始问题：{question}")
+    user_parts.append(f"分析意图：{intent}")
+    user_parts.append(f"DataFrame 列信息：\n{chr(10).join(col_lines)}")
+    user_parts.append(f"数据预览（前 3 行）：\n{head_text}")
+    user_parts.append(f"统计摘要：\n{stats_text}")
+    user_parts.append("请输出图表配置 JSON：")
+    user_content = "\n\n".join(user_parts)
 
     try:
         llm = get_llm_client(settings["llm"])
@@ -558,7 +563,9 @@ def chart_node(state: GraphState) -> GraphState:
         try:
             from sql_agent._config import load_settings
             settings = load_settings()
-            chart_config = _llm_chart_decision(df, intent, settings, log=log)
+            chart_config = _llm_chart_decision(df, intent, settings,
+                                                   log=log,
+                                                   question=state.get("question", ""))
         except Exception as e:
             log.append(f"   ⚠️ LLM 图表决策加载失败：{type(e).__name__}：{e}")
 
