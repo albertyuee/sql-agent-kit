@@ -194,12 +194,15 @@ def _llm_chart_decision(df, intent: str, settings: dict,
         "要求：\n"
         '1. 仔细阅读\u201c用户原始问题\u201d，用户的图表类型偏好、要展示的指标、特殊标注需求（如参考线）都必须尊重\n'
         "2. x_col / y_col 必须是 DataFrame 中真实存在的列名，不能编造\n"
-        "3. color_col 是可选的，仅当有自然分组维度时填写，否则填 null\n"
+        "3. color_col 用于区分不同组/类别。重要规则：\n"
+        "   - 如果数据有 channel、category、region、类型、渠道、品类 等分类列，且问题要\"对比各XX\"，必须设 color_col\n"
+        "   - 如果数据按 channel+month 分组，X 轴选了 month，则 color_col 必须设为 channel（否则所有渠道会混在一起）\n"
+        "   - 只有确实不需要分组对比时才填 null\n"
         "4. title / x_label / y_label 用中文\n"
         "5. 如果数据中有多个相关数值列（比如同时有花费、收入、ROI），优先考虑 bar_stack 或 dual_axis 来全面展示\n"
         "6. 只输出 JSON，不要任何解释\n\n"
-        '输出格式：\n'
-        '{"chart_type": "bar", "x_col": "类别", "y_col": "销售额", "color_col": null, "title": "各类别销售额对比", "x_label": "类别", "y_label": "销售额（元）"}'
+        '输出格式（注意 color_col 不为 null 的示例）：\n'
+        '{"chart_type": "bar", "x_col": "月份", "y_col": "销售额", "color_col": "渠道", "title": "各渠道月度销售额对比", "x_label": "月份", "y_label": "销售额（元）"}'
     )
 
     user_parts = []
