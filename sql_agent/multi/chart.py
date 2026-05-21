@@ -343,7 +343,16 @@ def _build_figure(df, chart_type: str, title: str, intent: str = "",
         if not y2_col or y2_col == y_col:
             chart_type = "bar"
         else:
-            df = _apply_sort(df, y_col, sort_order)
+            # 时间序列 X 轴按时间排序，避免折线因 Y 值排序而错乱
+            time_kws = ["date", "time", "month", "year", "day", "日", "月", "年", "时间"]
+            is_time_x = x_col in effective_time_cols or any(
+                kw in str(x_col).lower() for kw in time_kws
+            )
+            if is_time_x:
+                df, _ = _try_parse_datetime(df, x_col)
+                df = df.sort_values(x_col)
+            else:
+                df = _apply_sort(df, y_col, sort_order)
 
             # 第三指标（若有）写入 hover 自定义数据
             extra_cols = [c for c in numeric_cols if c not in (y_col, y2_col)]
