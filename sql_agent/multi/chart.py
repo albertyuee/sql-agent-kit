@@ -236,7 +236,8 @@ def _llm_chart_decision(df, intent: str, settings: dict) -> dict | None:
         return None
 
 
-def _build_figure(df, chart_type: str, title: str, intent: str = "") -> str:
+def _build_figure(df, chart_type: str, title: str, intent: str = "",
+                  chart_config: dict | None = None) -> str:
     """用 plotly.express / plotly.graph_objects 生成图表 JSON。
     所有参数（x/y/sort/label）均从数据推断，不依赖外部 hint。
     出错时抛出异常，由调用方记录日志。
@@ -252,8 +253,18 @@ def _build_figure(df, chart_type: str, title: str, intent: str = "") -> str:
     cat_cols = [c for c in cols if c not in numeric_cols and c not in time_cols]
     effective_time_cols = [c for c in time_cols if df[c].nunique() > 1]
 
-    x_col = _pick_x_col(df, chart_type)
-    y_col = _pick_y_col(numeric_cols, intent, chart_type) or (numeric_cols[-1] if numeric_cols else cols[-1])
+    if chart_config:
+        # LLM 决策模式：直接用 LLM 给出的轴映射和标题
+        x_col = chart_config["x_col"]
+        y_col = chart_config["y_col"]
+        title = chart_config.get("title", title)
+        _llm_color = chart_config.get("color_col")
+    else:
+        # 规则推断模式（现有逻辑）
+        x_col = _pick_x_col(df, chart_type)
+        y_col = _pick_y_col(numeric_cols, intent, chart_type) or (numeric_cols[-1] if numeric_cols else cols[-1])
+        _llm_color = None
+
     show_label = _should_show_label(df)
     sort_order = _should_sort(chart_type)
 
@@ -263,6 +274,12 @@ def _build_figure(df, chart_type: str, title: str, intent: str = "") -> str:
         plot_bgcolor="white",
         paper_bgcolor="white",
     )
+
+    if chart_config:
+        if chart_config.get("x_label"):
+            _layout["xaxis_title"] = chart_config["x_label"]
+        if chart_config.get("y_label"):
+            _layout["yaxis_title"] = chart_config["y_label"]
 
     def _try_parse_datetime(df, col):
         try:
@@ -345,7 +362,7 @@ def _build_figure(df, chart_type: str, title: str, intent: str = "") -> str:
     if chart_type == "line":
         df, parsed = _try_parse_datetime(df, x_col)
         df = df.sort_values(x_col)
-        color_col = cat_cols[0] if cat_cols else None
+        color_col = _llm_color or (cat_cols[0] if cat_cols else None)
         # 多数值列无分类时，melt 为多条折线
         if len(numeric_cols) >= 2 and not cat_cols:
             df_melted = df.melt(id_vars=x_col, value_vars=numeric_cols,
@@ -371,7 +388,7 @@ def _build_figure(df, chart_type: str, title: str, intent: str = "") -> str:
     elif chart_type == "area":
         df, _ = _try_parse_datetime(df, x_col)
         df = df.sort_values(x_col)
-        color_col = cat_cols[0] if cat_cols else None
+        color_col = _llm_color or (cat_cols[0] if cat_cols else None)
         if len(numeric_cols) >= 2 and not cat_cols:
             df_melted = df.melt(id_vars=x_col, value_vars=numeric_cols,
                                 var_name="_metric", value_name="_value")
@@ -381,7 +398,7 @@ def _build_figure(df, chart_type: str, title: str, intent: str = "") -> str:
 
     elif chart_type == "bar":
         time_as_color = time_cols[0] if time_cols and df[time_cols[0]].nunique() > 1 else None
-        color_col = time_as_color if cat_cols else None
+        color_col = _llm_color or (time_as_color if cat_cols else None)
         df = _apply_sort(df, y_col, sort_order)
         fig = px.bar(df, x=x_col, y=y_col, color=color_col, title=title, barmode="group")
         if show_label:
@@ -396,7 +413,7 @@ def _build_figure(df, chart_type: str, title: str, intent: str = "") -> str:
             fig = px.bar(df_melted, x=id_col, y="_value", color="_metric",
                          title=title, barmode="stack")
         else:
-            color_col = time_cols[0] if time_cols else None
+            color_col = _llm_color or (time_cols[0] if time_cols else None)
             fig = px.bar(df, x=x_col, y=y_col, color=color_col, title=title, barmode="stack")
         if show_label:
             fig.update_traces(texttemplate="%{y:,.0f}", textposition="inside")
@@ -407,9 +424,9 @@ def _build_figure(df, chart_type: str, title: str, intent: str = "") -> str:
             fig.update_traces(textinfo="label+percent+value")
 
     elif chart_type == "scatter":
-        scatter_x = numeric_cols[0] if len(numeric_cols) >= 2 else cols[0]
-        scatter_y = numeric_cols[1] if len(numeric_cols) >= 2 else cols[1]
-        color_col = cat_cols[0] if cat_cols else None
+        scatter_x = x_col if chart_config else (numeric_cols[0] if len(numeric_cols) >= 2 else cols[0])
+        scatter_y = y_col if chart_config else (numeric_cols[1] if len(numeric_cols) >= 2 else cols[1])
+        color_col = _llm_color or (cat_cols[0] if cat_cols else None)
         fig = px.scatter(df, x=scatter_x, y=scatter_y, color=color_col, title=title)
 
     elif chart_type == "funnel":
@@ -429,7 +446,8 @@ def _build_figure(df, chart_type: str, title: str, intent: str = "") -> str:
             value_cols = count_cols if count_cols else numeric_cols
             df_melted = df.melt(id_vars=id_col, value_vars=value_cols,
                                 var_name="stage", value_name="count")
-            fig = px.bar(df_melted, x="stage", y="count", color=id_col,
+            color_col = _llm_color or id_col
+            fig = px.bar(df_melted, x="stage", y="count", color=color_col,
                          title=title, barmode="group",
                          labels={"stage": "漏斗阶段", "count": "用户数"})
             if show_label:
@@ -438,8 +456,8 @@ def _build_figure(df, chart_type: str, title: str, intent: str = "") -> str:
             fig = px.funnel(df, x=y_col, y=x_col, title=title)
 
     elif chart_type == "heatmap":
-        hm_x = cat_cols[0] if len(cat_cols) >= 1 else cols[0]
-        hm_y = cat_cols[1] if len(cat_cols) >= 2 else cols[1]
+        hm_x = x_col if chart_config else (cat_cols[0] if len(cat_cols) >= 1 else cols[0])
+        hm_y = _llm_color or (cat_cols[1] if len(cat_cols) >= 2 else cols[1])
         try:
             pivot = df.pivot(index=hm_y, columns=hm_x, values=y_col)
             fig = go.Figure(data=go.Heatmap(
