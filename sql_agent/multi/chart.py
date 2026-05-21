@@ -219,6 +219,20 @@ def _llm_chart_decision(df, intent: str, settings: dict,
             return None
         config = json.loads(match.group())
 
+        # 归一化：部分模型可能返回列表、逗号分隔字符串等非标量值
+        def _scalar(v):
+            if isinstance(v, list) and len(v) > 0:
+                return str(v[0])
+            if isinstance(v, str) and "," in v:
+                return v.split(",")[0].strip()
+            return v
+
+        config["chart_type"] = _scalar(config.get("chart_type", ""))
+        config["x_col"] = _scalar(config.get("x_col", ""))
+        config["y_col"] = _scalar(config.get("y_col", ""))
+        if config.get("color_col"):
+            config["color_col"] = _scalar(config["color_col"])
+
         # 校验 chart_type 合法性
         valid_types = {
             "line", "area", "bar", "bar_stack", "pie",
