@@ -144,11 +144,16 @@ def _should_show_label(df) -> bool:
     return len(df) <= 15
 
 
-def _llm_chart_decision(df, intent: str, settings: dict) -> dict | None:
-    """调用 LLM 决策图表类型、轴映射和标题。成功返回 dict，失败返回 None。"""
+def _llm_chart_decision(df, intent: str, settings: dict,
+                       log: list | None = None) -> dict | None:
+    """调用 LLM 决策图表类型、轴映射和标题。成功返回 dict，失败返回 None 并写 log。"""
     import json
     import re
     from sql_agent.llm import get_llm_client
+
+    def _note(msg: str):
+        if log is not None:
+            log.append(f"   🔍 {msg}")
 
     # 构建列信息（列名 + 类型 + 样本值）
     col_lines = []
@@ -208,8 +213,9 @@ def _llm_chart_decision(df, intent: str, settings: dict) -> dict | None:
         ]
         raw = llm.chat(messages, temperature=0.0)
 
-        match = re.search(r"\{[\s\S]+\}", raw)
+        match = re.search(r"\{[\s\S]+?\}", raw)
         if not match:
+            _note(f"LLM 返回中未找到 JSON（原始输出前200字：{raw[:200]}）")
             return None
         config = json.loads(match.group())
 
@@ -219,20 +225,25 @@ def _llm_chart_decision(df, intent: str, settings: dict) -> dict | None:
             "scatter", "funnel", "heatmap", "dual_axis", "table",
         }
         if config.get("chart_type") not in valid_types:
+            _note(f"LLM 返回非法图表类型：{config.get('chart_type')}")
             return None
 
         # 校验列名真实存在
         if config.get("x_col") not in df.columns:
+            _note(f"LLM 返回的 x_col='{config.get('x_col')}' 不在数据列 {list(df.columns)} 中")
             return None
         if config.get("y_col") not in df.columns:
+            _note(f"LLM 返回的 y_col='{config.get('y_col')}' 不在数据列 {list(df.columns)} 中")
             return None
         color = config.get("color_col")
         if color and color not in df.columns:
+            _note(f"LLM 返回的 color_col='{color}' 不在数据列 {list(df.columns)} 中")
             return None
 
         return config
 
-    except Exception:
+    except Exception as e:
+        _note(f"LLM 图表决策调用异常：{type(e).__name__}：{e}")
         return None
 
 
@@ -533,9 +544,9 @@ def chart_node(state: GraphState) -> GraphState:
         try:
             from sql_agent._config import load_settings
             settings = load_settings()
-            chart_config = _llm_chart_decision(df, intent, settings)
-        except Exception:
-            chart_config = None
+            chart_config = _llm_chart_decision(df, intent, settings, log=log)
+        except Exception as e:
+            log.append(f"   ⚠️ LLM 图表决策加载失败：{type(e).__name__}：{e}")
 
         if chart_config:
             chart_type = chart_config["chart_type"]
