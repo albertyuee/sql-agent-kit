@@ -46,6 +46,10 @@ def _infer_chart_type(df, intent: str) -> str:
     intent_lower = (intent or "").lower()
     is_trend = any(kw in intent_lower for kw in ["趋势", "变化", "走势", "trend", "增长", "下降", "波动"])
 
+    # 单行全数字数据 → 漏斗图（转置展示，如：曝光→点击→订单）
+    if len(df) == 1 and not cat_cols and len(numeric_cols) >= 2:
+        return "funnel"
+
     if effective_time_cols and numeric_cols:
         return "area" if cat_cols else "line"
     if len(cat_cols) >= 2 and len(numeric_cols) == 1:
@@ -229,12 +233,17 @@ def _llm_chart_decision(df, intent: str, settings: dict,
             return None
         config = json.loads(match.group())
 
-        # 归一化：部分模型可能返回列表、逗号分隔字符串等非标量值
+        # 归一化：部分模型可能返回列表、逗号分隔字符串、"None"/"null" 等非标量值
         def _scalar(v):
+            if v is None:
+                return None
             if isinstance(v, list) and len(v) > 0:
                 return str(v[0])
-            if isinstance(v, str) and "," in v:
-                return v.split(",")[0].strip()
+            if isinstance(v, str):
+                if v.lower() in ("none", "null", "nan", ""):
+                    return None
+                if "," in v:
+                    return v.split(",")[0].strip()
             return v
 
         config["chart_type"] = _scalar(config.get("chart_type", ""))
@@ -252,12 +261,14 @@ def _llm_chart_decision(df, intent: str, settings: dict,
             _note(f"LLM 返回非法图表类型：{config.get('chart_type')}")
             return None
 
-        # 校验列名真实存在
-        if config.get("x_col") not in df.columns:
-            _note(f"LLM 返回的 x_col='{config.get('x_col')}' 不在数据列 {list(df.columns)} 中")
+        # 校验列名真实存在（None 允许通过，漏斗图等场景 x_col/y_col 可为空）
+        x_col = config.get("x_col")
+        y_col = config.get("y_col")
+        if x_col is not None and x_col not in df.columns:
+            _note(f"LLM 返回的 x_col='{x_col}' 不在数据列 {list(df.columns)} 中")
             return None
-        if config.get("y_col") not in df.columns:
-            _note(f"LLM 返回的 y_col='{config.get('y_col')}' 不在数据列 {list(df.columns)} 中")
+        if y_col is not None and y_col not in df.columns:
+            _note(f"LLM 返回的 y_col='{y_col}' 不在数据列 {list(df.columns)} 中")
             return None
         color = config.get("color_col")
         if color and color not in df.columns:
