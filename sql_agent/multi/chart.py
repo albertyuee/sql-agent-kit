@@ -57,7 +57,7 @@ def _infer_chart_type(df, intent: str) -> str:
 
     if cat_cols and len(numeric_cols) == 1:
         if len(df) <= 6:
-            return "pie"
+            return "donut"
         col_text = " ".join(cols).lower()
         if any(kw in col_text for kw in ["funnel", "stage", "step", "转化", "漏斗", "步骤"]):
             return "funnel"
@@ -134,7 +134,7 @@ def _pick_x_col(df, chart_type: str) -> str:
 
 def _should_sort(chart_type: str) -> str:
     """判断是否需要排序及排序方向。"""
-    if chart_type in ("bar", "pie", "funnel", "dual_axis"):
+    if chart_type in ("bar", "barh", "pie", "donut", "funnel", "dual_axis"):
         return "desc"
     return "none"
 
@@ -181,9 +181,11 @@ def _llm_chart_decision(df, intent: str, settings: dict,
         "可用图表类型及典型场景：\n"
         "- line: 时间序列趋势，X 轴为时间/日期列\n"
         "- area: 面积趋势图，强调累积变化\n"
-        "- bar: 分类对比，X 轴为分类列，Y 轴为数值列\n"
+        "- bar: 分类对比，X 轴为分类列，Y 轴为数值列（竖柱状图）\n"
+        "- barh: 横向柱状图，适合分类名较长或 Top-N 排行\n"
         "- bar_stack: 多指标堆叠对比，同量纲多数值列\n"
         "- pie: 占比分布，≤6 个分类 + 单数值列\n"
+        "- donut: 环形图，同 pie 但中心留空，视觉效果更好\n"
         "- scatter: 两数值列的相关性/分布分析\n"
         "- funnel: 转化漏斗，含阶段/步骤列\n"
         "- heatmap: 两个分类维度的交叉矩阵\n"
@@ -240,7 +242,7 @@ def _llm_chart_decision(df, intent: str, settings: dict,
 
         # 校验 chart_type 合法性
         valid_types = {
-            "line", "area", "bar", "bar_stack", "pie",
+            "line", "area", "bar", "barh", "bar_stack", "pie", "donut",
             "scatter", "funnel", "heatmap", "dual_axis", "table",
         }
         if config.get("chart_type") not in valid_types:
@@ -434,6 +436,13 @@ def _build_figure(df, chart_type: str, title: str, intent: str = "",
         if show_label:
             fig.update_traces(texttemplate="%{y:,.0f}", textposition="outside")
 
+    elif chart_type == "barh":
+        color_col = _llm_color or (cat_cols[0] if cat_cols else None)
+        df = _apply_sort(df, y_col, sort_order)
+        fig = px.bar(df, x=y_col, y=x_col, color=color_col, title=title, orientation="h")
+        if show_label:
+            fig.update_traces(texttemplate="%{x:,.0f}", textposition="outside")
+
     elif chart_type == "bar_stack":
         if cat_cols and len(numeric_cols) >= 2:
             id_col = cat_cols[0]
@@ -448,8 +457,9 @@ def _build_figure(df, chart_type: str, title: str, intent: str = "",
         if show_label:
             fig.update_traces(texttemplate="%{y:,.0f}", textposition="inside")
 
-    elif chart_type == "pie":
-        fig = px.pie(df, names=x_col, values=y_col, title=title)
+    elif chart_type in ("pie", "donut"):
+        hole = 0.4 if chart_type == "donut" else 0
+        fig = px.pie(df, names=x_col, values=y_col, title=title, hole=hole)
         if show_label:
             fig.update_traces(textinfo="label+percent+value")
 
@@ -506,8 +516,46 @@ def _build_figure(df, chart_type: str, title: str, intent: str = "",
     if fig is None:
         raise ValueError(f"未知图表类型：{chart_type}")
 
+    # 自动检测参考线：数值列中若有近乎常数的列（如 avg_roi、mean_xxx），添加参考线
+    _add_reference_lines(fig, df, chart_type)
+
     fig.update_layout(**_layout)
     return fig.to_json()
+
+
+def _add_reference_lines(fig, df, chart_type: str):
+    """检测 DataFrame 中的常数/近常数数值列，自动添加水平/垂直参考线。"""
+    import pandas as pd
+
+    REF_KWS = ["avg", "mean", "median", "average", "基准", "平均", "参考", "target", "目标"]
+    for col in df.columns:
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            continue
+        if not any(kw in col.lower() for kw in REF_KWS):
+            continue
+        vals = df[col].dropna()
+        if len(vals) < 1:
+            continue
+        # 检查是否近乎常数：变异系数 < 1%
+        ref_val = vals.iloc[0]
+        if len(vals) >= 2 and vals.std() > abs(vals.mean()) * 0.01:
+            continue
+
+        is_horizontal = chart_type in ("barh",)
+        col_label = col.replace("_", " ")
+
+        if is_horizontal:
+            fig.add_vline(
+                x=ref_val, line_dash="dash", line_color="#ff4d4f",
+                annotation_text=f"{col_label}: {ref_val:,.2f}",
+                annotation_position="top",
+            )
+        else:
+            fig.add_hline(
+                y=ref_val, line_dash="dash", line_color="#ff4d4f",
+                annotation_text=f"{col_label}: {ref_val:,.2f}",
+                annotation_position="top right",
+            )
 
 
 def chart_node(state: GraphState) -> GraphState:
