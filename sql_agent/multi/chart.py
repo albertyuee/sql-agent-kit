@@ -528,17 +528,46 @@ def chart_node(state: GraphState) -> GraphState:
                 except (ValueError, TypeError):
                     pass  # 非数值文本列，保持原样
 
-        chart_type = _infer_chart_type(df, intent)
+        # 尝试 LLM 决策
+        chart_config = None
+        try:
+            from sql_agent._config import load_settings
+            settings = load_settings()
+            chart_config = _llm_chart_decision(df, intent, settings)
+        except Exception:
+            chart_config = None
 
-        if chart_type == "table":
-            log.append(f"   📋 判断结果：纯表格展示（数据列：{list(df.columns)}）")
-            return {**state, "chart_json": "", "chart_source_index": target_index, "process_log": log}
+        if chart_config:
+            chart_type = chart_config["chart_type"]
+            if chart_type == "table":
+                log.append(
+                    f"   ✅ AI 决策：table（数据更适合表格展示）\n"
+                    f"   数据：{len(df)} 行 × {len(df.columns)} 列"
+                )
+                return {**state, "chart_json": "", "chart_source_index": target_index, "process_log": log}
 
-        chart_json = _build_figure(df, chart_type, title=intent, intent=intent)
-        log.append(
-            f"   ✅ 图表类型：{chart_type}（规则推断）\n"
-            f"   数据：{len(df)} 行 × {len(df.columns)} 列"
-        )
+            chart_json = _build_figure(df, chart_type, title=intent, intent=intent,
+                                       chart_config=chart_config)
+            log.append(
+                f"   ✅ AI 决策：{chart_config['chart_type']}"
+                f" | X={chart_config['x_col']} | Y={chart_config['y_col']}"
+                f" | 标题=\"{chart_config.get('title', '')}\"\n"
+                f"   数据：{len(df)} 行 × {len(df.columns)} 列"
+            )
+        else:
+            # 规则兜底
+            log.append("   ⚠️ AI 决策未生效，回退到规则推断")
+            chart_type = _infer_chart_type(df, intent)
+
+            if chart_type == "table":
+                log.append(f"   📋 判断结果：纯表格展示（数据列：{list(df.columns)}）")
+                return {**state, "chart_json": "", "chart_source_index": target_index, "process_log": log}
+
+            chart_json = _build_figure(df, chart_type, title=intent, intent=intent)
+            log.append(
+                f"   ✅ 图表类型：{chart_type}（规则推断）\n"
+                f"   数据：{len(df)} 行 × {len(df.columns)} 列"
+            )
         return {**state, "chart_json": chart_json, "chart_source_index": target_index, "process_log": log}
 
     except Exception as e:
