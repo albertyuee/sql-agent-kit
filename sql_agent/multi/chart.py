@@ -558,6 +558,53 @@ def _add_reference_lines(fig, df, chart_type: str):
             )
 
 
+def _sanity_check(df, chart_type: str, chart_config: dict | None,
+                 question: str, intent: str) -> list[str]:
+    """对图表决策做规则自检，返回警告列表。"""
+    import pandas as pd
+
+    warnings = []
+    question_lower = (question + " " + intent).lower()
+    numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+    cat_cols = [c for c in df.columns if c not in numeric_cols]
+
+    # 1. 意图提到"各XX"/"不同"/"按XX"但未设分组
+    if cat_cols and chart_config:
+        has_group_intent = any(kw in question_lower for kw in
+            ["各", "不同", "每个", "每种", "分别", "按", "per", "each", "by "])
+        has_color = bool(chart_config.get("color_col"))
+        if has_group_intent and not has_color:
+            warnings.append(
+                f"⚠️ 问题提到分组对比，但未指定分组列。"
+                f"可选分组列：{cat_cols}，建议设置 color_col"
+            )
+
+    # 2. 意图提到"趋势"/"变化"/"走势"但用了非时序图表
+    has_trend_intent = any(kw in question_lower for kw in
+        ["趋势", "变化", "走势", "trend", "增长", "下降", "波动", "随时间", "time"])
+    time_cols = [c for c in df.columns if any(
+        kw in str(c).lower() for kw in ["date", "time", "month", "year", "日", "月", "年", "时间"]
+    )]
+    if has_trend_intent and time_cols and chart_type not in ("line", "area", "dual_axis"):
+        warnings.append(
+            f"⚠️ 问题涉及时间趋势，但图表类型为 {chart_type}。"
+            f"数据中存在时间列 {time_cols}，建议改用 line / area / dual_axis"
+        )
+
+    # 3. 多指标场景用了单指标图表
+    if numeric_cols and chart_config:
+        relevant_metrics = len(numeric_cols)
+        single_metric_types = ("bar", "barh", "pie", "donut")
+        if relevant_metrics >= 2 and chart_type in single_metric_types and not chart_config.get("color_col"):
+            warnings.append(
+                f"⚠️ 数据有 {relevant_metrics} 个数值列 {numeric_cols[:5]}，"
+                f"但仅选了 {chart_config.get('y_col')}。"
+                f"如需全面展示，建议用 bar_stack 或 dual_axis"
+            )
+
+    return warnings
+
+
 def chart_node(state: GraphState) -> GraphState:
     """Chart Agent 节点：纯规则推断图表类型并生成 plotly JSON"""
     import pandas as pd
@@ -625,6 +672,13 @@ def chart_node(state: GraphState) -> GraphState:
                     f"   数据：{len(df)} 行 × {len(df.columns)} 列"
                 )
                 return {**state, "chart_json": "", "chart_source_index": target_index, "process_log": log}
+
+            # 规则自检
+            check_warnings = _sanity_check(
+                df, chart_type, chart_config,
+                question=state.get("question", ""), intent=intent,
+            )
+            log.extend(check_warnings)
 
             chart_json = _build_figure(df, chart_type, title=intent, intent=intent,
                                        chart_config=chart_config)
