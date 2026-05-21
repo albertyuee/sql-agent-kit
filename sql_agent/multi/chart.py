@@ -144,6 +144,98 @@ def _should_show_label(df) -> bool:
     return len(df) <= 15
 
 
+def _llm_chart_decision(df, intent: str, settings: dict) -> dict | None:
+    """调用 LLM 决策图表类型、轴映射和标题。成功返回 dict，失败返回 None。"""
+    import json
+    import re
+    from sql_agent.llm import get_llm_client
+
+    # 构建列信息（列名 + 类型 + 样本值）
+    col_lines = []
+    for col in df.columns:
+        dtype_str = str(df[col].dtype)
+        sample_val = "N/A"
+        if len(df) > 0:
+            try:
+                sample_val = str(df[col].iloc[0])
+            except Exception:
+                pass
+        col_lines.append(f"  - {col} (dtype: {dtype_str}, 样本: {sample_val})")
+
+    head_text = df.head(3).to_string(index=False) if len(df) > 0 else "（空数据）"
+
+    try:
+        stats_text = df.describe(include="all").to_string()
+    except Exception:
+        stats_text = "无法生成统计摘要"
+
+    system_prompt = (
+        "你是数据可视化专家。根据提供的 DataFrame 结构、数据预览、统计摘要和分析意图，"
+        "选择最合适的图表配置。\n\n"
+        "可用图表类型及典型场景：\n"
+        "- line: 时间序列趋势，X 轴为时间/日期列\n"
+        "- area: 面积趋势图，强调累积变化\n"
+        "- bar: 分类对比，X 轴为分类列，Y 轴为数值列\n"
+        "- bar_stack: 多指标堆叠对比，同量纲多数值列\n"
+        "- pie: 占比分布，≤6 个分类 + 单数值列\n"
+        "- scatter: 两数值列的相关性/分布分析\n"
+        "- funnel: 转化漏斗，含阶段/步骤列\n"
+        "- heatmap: 两个分类维度的交叉矩阵\n"
+        "- dual_axis: 双 Y 轴，同时展示量和率（如销售额 + 转化率）\n"
+        "- table: 数据不适合图表展示（列数过多/无有意义的图表映射）\n\n"
+        "要求：\n"
+        "1. x_col / y_col 必须是 DataFrame 中真实存在的列名，不能编造\n"
+        "2. color_col 是可选的，仅当有自然分组维度时填写，否则填 null\n"
+        "3. title / x_label / y_label 用中文\n"
+        "4. 只输出 JSON，不要任何解释\n\n"
+        '输出格式：\n'
+        '{"chart_type": "bar", "x_col": "类别", "y_col": "销售额", "color_col": null, "title": "各类别销售额对比", "x_label": "类别", "y_label": "销售额（元）"}'
+    )
+
+    user_content = (
+        f"分析意图：{intent}\n\n"
+        f"DataFrame 列信息：\n{chr(10).join(col_lines)}\n\n"
+        f"数据预览（前 3 行）：\n{head_text}\n\n"
+        f"统计摘要：\n{stats_text}\n\n"
+        "请输出图表配置 JSON："
+    )
+
+    try:
+        llm = get_llm_client(settings["llm"])
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ]
+        raw = llm.chat(messages, temperature=0.0)
+
+        match = re.search(r"\{[\s\S]+\}", raw)
+        if not match:
+            return None
+        config = json.loads(match.group())
+
+        # 校验 chart_type 合法性
+        valid_types = {
+            "line", "area", "bar", "bar_stack", "pie",
+            "scatter", "funnel", "heatmap", "dual_axis", "table",
+        }
+        if config.get("chart_type") not in valid_types:
+            return None
+
+        # 校验列名真实存在
+        if config.get("x_col") not in df.columns:
+            return None
+        if config.get("y_col") not in df.columns:
+            return None
+        color = config.get("color_col")
+        if color and color not in df.columns:
+            return None
+
+        return config
+
+    except Exception:
+        return None
+
+
 def _build_figure(df, chart_type: str, title: str, intent: str = "") -> str:
     """用 plotly.express / plotly.graph_objects 生成图表 JSON。
     所有参数（x/y/sort/label）均从数据推断，不依赖外部 hint。
