@@ -559,50 +559,69 @@ def _add_reference_lines(fig, df, chart_type: str):
 
 
 def _sanity_check(df, chart_type: str, chart_config: dict | None,
-                 question: str, intent: str) -> list[str]:
-    """对图表决策做规则自检，返回警告列表。"""
+                 question: str, intent: str) -> tuple[list[str], dict | None]:
+    """对图表决策做规则自检，返回 (警告列表, 修正后的 chart_config)。"""
     import pandas as pd
 
     warnings = []
+    if not chart_config:
+        return warnings, chart_config
+
+    fixed = dict(chart_config)  # 拷贝，避免修改原对象
     question_lower = (question + " " + intent).lower()
     numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
     cat_cols = [c for c in df.columns if c not in numeric_cols]
+    time_kws = ["date", "time", "month", "year", "day", "日", "月", "年", "时间"]
+    time_cols = [c for c in df.columns if any(kw in str(c).lower() for kw in time_kws)]
 
-    # 1. 意图提到"各XX"/"不同"/"按XX"但未设分组
-    if cat_cols and chart_config:
+    # 1. 意图提到"各XX"/"不同"/"按XX"但未设分组 → 自动补 color_col
+    if cat_cols:
         has_group_intent = any(kw in question_lower for kw in
             ["各", "不同", "每个", "每种", "分别", "按", "per", "each", "by "])
-        has_color = bool(chart_config.get("color_col"))
+        has_color = bool(fixed.get("color_col"))
         if has_group_intent and not has_color:
-            warnings.append(
-                f"⚠️ 问题提到分组对比，但未指定分组列。"
-                f"可选分组列：{cat_cols}，建议设置 color_col"
-            )
+            # 找最佳分组列：排除 X 轴和时间列后的分类列
+            x = fixed.get("x_col", "")
+            candidates = [c for c in cat_cols
+                         if c != x and c not in time_cols and df[c].nunique() <= 20]
+            if candidates:
+                # 选唯一值数量最合适的（2-10 个最佳）
+                best = max(candidates, key=lambda c: df[c].nunique() if df[c].nunique() <= 10 else 0)
+                fixed["color_col"] = best
+                warnings.append(
+                    f"💡 自动修正：检测到分组意图，已设置 color_col=\"{best}\""
+                    f"（可用分组列：{candidates}）"
+                )
+            else:
+                warnings.append(
+                    f"⚠️ 问题提到分组对比，但未找到合适的分组列。"
+                    f"分类列：{cat_cols}"
+                )
 
     # 2. 意图提到"趋势"/"变化"/"走势"但用了非时序图表
     has_trend_intent = any(kw in question_lower for kw in
         ["趋势", "变化", "走势", "trend", "增长", "下降", "波动", "随时间", "time"])
-    time_cols = [c for c in df.columns if any(
-        kw in str(c).lower() for kw in ["date", "time", "month", "year", "日", "月", "年", "时间"]
-    )]
     if has_trend_intent and time_cols and chart_type not in ("line", "area", "dual_axis"):
+        # 如果有时间列 + 多个数值列 → dual_axis，否则 line
+        new_type = "dual_axis" if len(numeric_cols) >= 2 else "line"
+        fixed["chart_type"] = new_type
         warnings.append(
-            f"⚠️ 问题涉及时间趋势，但图表类型为 {chart_type}。"
-            f"数据中存在时间列 {time_cols}，建议改用 line / area / dual_axis"
+            f"💡 自动修正：检测到时间趋势意图 + 时间列 {time_cols}，"
+            f"图表类型已从 {chart_type} 改为 {new_type}"
         )
 
-    # 3. 多指标场景用了单指标图表
-    if numeric_cols and chart_config:
-        relevant_metrics = len(numeric_cols)
+    # 3. 多指标场景用了单指标图表 → 自动升级
+    if numeric_cols and fixed:
         single_metric_types = ("bar", "barh", "pie", "donut")
-        if relevant_metrics >= 2 and chart_type in single_metric_types and not chart_config.get("color_col"):
+        if len(numeric_cols) >= 2 and chart_type in single_metric_types and not fixed.get("color_col"):
+            new_type = "bar_stack" if chart_type in ("bar", "barh") else "dual_axis"
+            fixed["chart_type"] = new_type
             warnings.append(
-                f"⚠️ 数据有 {relevant_metrics} 个数值列 {numeric_cols[:5]}，"
-                f"但仅选了 {chart_config.get('y_col')}。"
-                f"如需全面展示，建议用 bar_stack 或 dual_axis"
+                f"💡 自动修正：数据有 {len(numeric_cols)} 个数值列但用了单指标图，"
+                f"已升级为 {new_type}"
             )
 
-    return warnings
+    return warnings, fixed
 
 
 def chart_node(state: GraphState) -> GraphState:
@@ -673,12 +692,14 @@ def chart_node(state: GraphState) -> GraphState:
                 )
                 return {**state, "chart_json": "", "chart_source_index": target_index, "process_log": log}
 
-            # 规则自检
-            check_warnings = _sanity_check(
+            # 规则自检 + 自动修正
+            check_warnings, chart_config = _sanity_check(
                 df, chart_type, chart_config,
                 question=state.get("question", ""), intent=intent,
             )
             log.extend(check_warnings)
+            if chart_config:
+                chart_type = chart_config["chart_type"]
 
             chart_json = _build_figure(df, chart_type, title=intent, intent=intent,
                                        chart_config=chart_config)
