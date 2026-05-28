@@ -69,8 +69,8 @@ ok "虚拟环境已激活"
 
 # ── 5. 安装 Python 依赖 ─────────────────────────
 info "安装 Python 依赖（requirements-backend.txt）..."
-python -m pip install --quiet --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple
-python -m pip install --progress-bar on -r requirements-backend.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+python -m pip install --quiet --upgrade pip -i https://mirrors.aliyun.com/pypi/simple
+python -m pip install --progress-bar on -r requirements-backend.txt -i https://mirrors.aliyun.com/pypi/simple
 ok "Python 依赖已安装"
 
 # ── 6. 安装前端依赖 ─────────────────────────────
@@ -96,7 +96,7 @@ cd ..
 mkdir -p logs data config
 
 # ── 9. 启动后端 ─────────────────────────────────
-PORT=${PORT:-8000}
+PORT=${PORT:-8432}
 echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${GREEN}  启动成功！访问地址：http://localhost:${PORT}${NC}"
