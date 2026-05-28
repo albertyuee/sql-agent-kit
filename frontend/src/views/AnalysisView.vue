@@ -35,6 +35,34 @@
 
     <template v-if="started">
 
+      <!-- 阶段进度 -->
+      <div class="card progress-card">
+        <div class="progress-head">
+          <div>
+            <div class="label">⏱️ 分析进度</div>
+            <div class="stage-current">
+              当前阶段：{{ currentStageLabel }}
+              <span v-if="streaming" class="elapsed">已耗时 {{ elapsedSeconds }}s</span>
+            </div>
+          </div>
+          <div class="progress-percent">{{ completedStageCount }}/{{ stages.length }}</div>
+        </div>
+        <div class="stage-steps">
+          <div
+            v-for="stage in stages"
+            :key="stage.id"
+            class="stage-step"
+            :class="`stage-step--${stageStatus[stage.id]?.status || 'pending'}`"
+          >
+            <div class="stage-dot">{{ stageIcon(stage.id) }}</div>
+            <div class="stage-info">
+              <div class="stage-name">{{ stage.label }}</div>
+              <div class="stage-desc">{{ stageSubtitle(stage.id) }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- 过程日志 -->
       <div class="two-col">
         <div class="card" style="flex:1">
@@ -157,15 +185,85 @@ const chartLogs = ref([])
 const suggestions = ref([])
 const loadingSuggestions = ref(false)
 const CHART_SOURCES = new Set(['chart'])
+const stages = [
+  { id: 'classifier', label: '意图识别' },
+  { id: 'planner', label: '任务规划' },
+  { id: 'sql', label: 'SQL生成与执行' },
+  { id: 'chart', label: '图表生成' },
+  { id: 'summary', label: '结论生成' },
+  { id: 'judge', label: '质量评分' },
+]
+const stageStatus = ref(createInitialStageStatus())
+const currentStage = ref('')
+const elapsedSeconds = ref(0)
+let startedAt = 0
+let elapsedTimer = null
 
 // 当前 tab 对应的结果
 const currentResult = computed(() => sqlResults.value[activeTab.value] || null)
+const completedStageCount = computed(() => stages.filter(s => stageStatus.value[s.id]?.status === 'done').length)
+const currentStageLabel = computed(() => {
+  if (!streaming.value && result.value) return '已完成'
+  if (!streaming.value && !result.value) return '未开始'
+  const stage = stages.find(s => s.id === currentStage.value)
+  return stage?.label || '准备中'
+})
 
 // 组件卸载时关闭 SSE（修复5：切换页面不关闭连接）
 onUnmounted(() => {
   es?.close()
   es = null
+  stopElapsedTimer()
 })
+
+function createInitialStageStatus() {
+  return Object.fromEntries(stages.map(s => [s.id, { status: 'pending', elapsed_ms: null }]))
+}
+
+function startElapsedTimer() {
+  stopElapsedTimer()
+  startedAt = Date.now()
+  elapsedSeconds.value = 0
+  elapsedTimer = setInterval(() => {
+    elapsedSeconds.value = Math.floor((Date.now() - startedAt) / 1000)
+  }, 1000)
+}
+
+function stopElapsedTimer() {
+  if (elapsedTimer) {
+    clearInterval(elapsedTimer)
+    elapsedTimer = null
+  }
+}
+
+function stageIcon(id) {
+  const status = stageStatus.value[id]?.status || 'pending'
+  if (status === 'done') return '✓'
+  if (status === 'running') return '…'
+  if (status === 'error') return '!'
+  return ''
+}
+
+function stageSubtitle(id) {
+  const s = stageStatus.value[id] || {}
+  if (s.status === 'running') return '进行中'
+  if (s.status === 'done') return s.elapsed_ms ? `${(s.elapsed_ms / 1000).toFixed(1)}s` : '已完成'
+  if (s.status === 'error') return '失败'
+  return '等待中'
+}
+
+function handleStageEvent(payload) {
+  const source = payload.source
+  if (!source || !stageStatus.value[source]) return
+  stageStatus.value = {
+    ...stageStatus.value,
+    [source]: {
+      status: payload.status,
+      elapsed_ms: payload.elapsed_ms ?? stageStatus.value[source].elapsed_ms,
+    },
+  }
+  if (payload.status === 'running') currentStage.value = source
+}
 
 async function fetchSuggestions() {
   loadingSuggestions.value = true
@@ -204,8 +302,11 @@ function startAnalysis() {
   activeTab.value = 0
   tabSqlErrors.value = {}
   chartSourceIndex.value = 0
+  stageStatus.value = createInitialStageStatus()
+  currentStage.value = ''
   started.value = true
   streaming.value = true
+  startElapsedTimer()
 
   es = analysisApi.stream(question.value.trim())
 
@@ -216,6 +317,12 @@ function startAnalysis() {
     } else {
       analysisLogs.value.push(text)
     }
+  })
+
+  es.addEventListener('stage', (e) => {
+    try {
+      handleStageEvent(JSON.parse(e.data))
+    } catch {}
   })
 
   es.addEventListener('sql_result', (e) => {
@@ -262,11 +369,15 @@ function startAnalysis() {
     try {
       const { message } = JSON.parse(e.data)
       analysisLogs.value.push(`❌ 错误：${message}`)
+      if (currentStage.value && stageStatus.value[currentStage.value]) {
+        handleStageEvent({ source: currentStage.value, status: 'error' })
+      }
     } catch {}
   })
 
   es.addEventListener('done', () => {
     streaming.value = false
+    stopElapsedTimer()
     es?.close()
     es = null
   })
@@ -275,6 +386,7 @@ function startAnalysis() {
     // 修复1：无论 readyState 是 CLOSED 还是 CONNECTING，都终止流式状态
     // CONNECTING 表示浏览器在自动重连，但我们的管道是一次性的，不需要重连
     streaming.value = false
+    stopElapsedTimer()
     es?.close()
     es = null
   }
@@ -282,6 +394,7 @@ function startAnalysis() {
 
 function stopAnalysis() {
   streaming.value = false
+  stopElapsedTimer()
   es?.close()
   es = null
 }
@@ -305,6 +418,25 @@ function stopAnalysis() {
 }
 .chip:hover { background: #e0e1ff; }
 .two-col { display: flex; gap: 16px; align-items: flex-start; }
+.progress-card { border-left: 4px solid #7c83fd; }
+.progress-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 14px; }
+.stage-current { margin-top: 4px; font-size: 13px; color: #555; }
+.elapsed { margin-left: 8px; color: #888; }
+.progress-percent { font-size: 13px; color: #7c83fd; font-weight: 700; }
+.stage-steps { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+.stage-step { display: flex; gap: 8px; align-items: center; padding: 10px; border: 1px solid #eee; border-radius: 10px; background: #fafafa; min-width: 0; }
+.stage-dot { width: 22px; height: 22px; border-radius: 50%; background: #e5e7eb; color: #888; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; flex-shrink: 0; }
+.stage-info { min-width: 0; }
+.stage-name { font-size: 13px; font-weight: 600; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stage-desc { margin-top: 2px; font-size: 12px; color: #999; }
+.stage-step--running { border-color: #7c83fd; background: #f5f6ff; }
+.stage-step--running .stage-dot { background: #7c83fd; color: #fff; animation: pulse 1s infinite; }
+.stage-step--done { border-color: #d9f7be; background: #f6ffed; }
+.stage-step--done .stage-dot { background: #52c41a; color: #fff; }
+.stage-step--error { border-color: #ffd6d6; background: #fff2f0; }
+.stage-step--error .stage-dot { background: #ff4d4f; color: #fff; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+@media (max-width: 1100px) { .stage-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .summary-text { font-size: 14px; line-height: 1.8; color: #333; margin-top: 4px; }
 .placeholder { color: #bbb; font-size: 13px; padding: 12px 0; }
 .row-count {

@@ -24,6 +24,7 @@ class GraphState(TypedDict, total=False):
     # Chart Agent 输出
     chart_json: str       # plotly figure.to_json()，空字符串表示无图表
     chart_source_index: int  # 画图所用的 sql_results 索引，与页面展示保持一致
+    chart_meta: dict      # 实际图表元数据：图表类型、轴映射、分组列、trace 信息等
 
     # Summary Agent 输出
     summary: str          # 2-4 句自然语言分析结论

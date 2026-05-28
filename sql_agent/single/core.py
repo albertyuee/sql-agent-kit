@@ -74,28 +74,46 @@ class SQLAgent:
         self._max_retry = max_retry
         self._confidence_threshold = confidence_threshold
 
-    def query(self, question: str) -> QueryResult:
+    def query(self, question: str, progress_callback=None) -> QueryResult:
         """
-        主入口：接收自然语言问题，返回查询结果
+        主入口：接收自然语言问题，返回查询结果。
+        progress_callback 可选，用于向前端流式推送阶段进度。
         """
         result = QueryResult(question=question)
 
+        def emit(source: str, status: str, **extra):
+            if progress_callback:
+                progress_callback({"source": source, "status": status, **extra})
+
         # 1. 构建 Schema 上下文
-        raw_schema = self._schema_loader.load()
-        enriched_schema = self._annotator.annotate(raw_schema)
-        selected_schema = self._selector.select(question, enriched_schema)
-        schema_text = self._annotator.format_for_prompt(selected_schema)
+        emit("schema", "running")
+        try:
+            raw_schema = self._schema_loader.load()
+            enriched_schema = self._annotator.annotate(raw_schema)
+            selected_schema = self._selector.select(question, enriched_schema)
+            schema_text = self._annotator.format_for_prompt(selected_schema)
+            emit("schema", "done")
+        except Exception:
+            emit("schema", "error")
+            raise
 
         # 2. Few-shot 检索
+        emit("fewshot", "running")
         fewshot_text = ""
-        if self._retriever:
-            examples = self._retriever.retrieve(question)
-            fewshot_text = self._retriever.format_for_prompt(examples)
+        try:
+            if self._retriever:
+                examples = self._retriever.retrieve(question)
+                fewshot_text = self._retriever.format_for_prompt(examples)
+            emit("fewshot", "done")
+        except Exception:
+            emit("fewshot", "error")
+            raise
 
         # 3. ReAct 重试循环
         error_feedback = ""
         for attempt in range(self._max_retry + 1):
             # 3.1 生成 SQL
+            emit("generate_sql", "running", attempt=attempt)
             messages = self._prompt_builder.build_sql_generation_prompt(
                 question=question,
                 schema_text=schema_text,
@@ -107,10 +125,13 @@ class SQLAgent:
             sql = self._extract_sql(raw_output)
             result.sql = sql
             result.retry_count = attempt
+            emit("generate_sql", "done", attempt=attempt, sql=sql)
 
             # 3.2 安全校验
+            emit("validate", "running", attempt=attempt)
             safe, reason = self._safety.validate(sql)
             if not safe:
+                emit("validate", "error", reason=reason)
                 result.error = f"安全校验失败: {reason}"
                 self._logger.log(question, sql, False, error=result.error)
                 return result
@@ -118,12 +139,14 @@ class SQLAgent:
             # 3.3 语法校验
             valid, reason = self._syntax.validate(sql)
             if not valid:
+                emit("validate", "error", reason=reason)
                 error_feedback = f"SQL 语法错误: {reason}"
                 continue  # 重试
 
             # 3.4 置信度评估
             confidence = self._confidence.estimate(sql, question)
             result.confidence = confidence
+            emit("validate", "done", attempt=attempt, confidence=confidence)
 
             if confidence < self._confidence_threshold:
                 # 置信度过低，不执行，让用户确认
@@ -135,10 +158,12 @@ class SQLAgent:
                 return result
 
             # 3.5 执行 SQL
+            emit("execute", "running", attempt=attempt)
             success, data_or_error = self._runner.run(sql)
 
             if success:
                 rows = data_or_error
+                emit("execute", "done", attempt=attempt, rows_count=len(rows))
                 result.success = True
                 result.data = rows
                 result.formatted_table = self._formatter.to_table(rows)
@@ -152,6 +177,7 @@ class SQLAgent:
             else:
                 # 执行失败，把错误信息反馈给 LLM，下一轮重试
                 error_feedback = data_or_error
+                emit("execute", "error", attempt=attempt, reason=error_feedback)
                 if attempt == self._max_retry:
                     result.error = f"执行失败（已重试 {self._max_retry} 次）: {error_feedback}"
                     self._logger.log(question, sql, False, error=result.error, retry_count=attempt)

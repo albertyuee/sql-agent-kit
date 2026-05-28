@@ -17,6 +17,7 @@ class PromptBuilder:
 3. 必须严格遵守字段含义说明，不要猜测字段含义
 4. 输出格式：只输出 SQL 代码，不要任何解释，不要 markdown 代码块标记
 5. 如果问题模糊无法确定，生成最合理的 SQL 并在注释中说明假设条件
+6. 按周统计时，周起始日期必须去掉时分秒；MySQL 可使用 DATE(DATE_SUB(created_at, INTERVAL WEEKDAY(created_at) DAY)) AS week_start，禁止直接用 DATE_SUB(created_at, INTERVAL WEEKDAY(created_at) DAY) 分组
 """
 
     def build_sql_generation_prompt(

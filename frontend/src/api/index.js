@@ -4,6 +4,8 @@ const http = axios.create({ baseURL: '/api' })
 
 export const queryApi = {
   run: (question) => http.post('/query', { question }),
+  stream: (question) =>
+    new EventSource(`/api/query/stream?question=${encodeURIComponent(question)}`),
 }
 
 export const analysisApi = {

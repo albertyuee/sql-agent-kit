@@ -21,7 +21,7 @@ _SYSTEM_PROMPT = """你是一个 AI 输出质量评审专家。
 输出格式：
 {"sql_correctness": 8, "chart_fitness": 9, "summary_quality": 7}
 
-注意：利用下方的"数据统计摘要"来客观评估——检查 SQL 是否查到了合理的数据分布，图表类型是否与数据特征匹配，结论中的数字是否与统计摘要一致。
+注意：利用下方的"数据统计摘要"和"真实图表元数据"来客观评估——检查 SQL 是否查到了合理的数据分布，图表是否覆盖用户要求的 X/Y/分组/双轴/trace，结论中的数字是否与统计摘要一致。若用户要求分组趋势但图表未按分组拆分 trace，chart_fitness 应明显扣分。
 """
 
 
@@ -32,6 +32,32 @@ def _resolve_log_path(raw_path: str) -> str:
     # __file__ = sql_agent/agents/judge.py → ../../ = 项目根
     repo_root = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
     return os.path.normpath(os.path.join(repo_root, raw_path))
+
+
+def _format_chart_meta_for_judge(chart_meta: dict) -> str:
+    """格式化 Chart Agent 真实图表元数据，避免把完整 chart_json 塞给 Judge。"""
+    if not chart_meta:
+        return "无图表元数据"
+    traces = chart_meta.get("traces") or []
+    trace_preview = traces[:20]
+    lines = [
+        f"chart_type: {chart_meta.get('chart_type')}",
+        f"x_col: {chart_meta.get('x_col')}",
+        f"y_cols: {chart_meta.get('y_cols')}",
+        f"color_col: {chart_meta.get('color_col')}",
+        f"series_mode: {chart_meta.get('series_mode')}",
+        f"trace_count: {chart_meta.get('trace_count', len(traces))}",
+        "traces:",
+    ]
+    for t in trace_preview:
+        lines.append(
+            f"  - name={t.get('name')}, type={t.get('type')}, "
+            f"xaxis={t.get('xaxis')}, yaxis={t.get('yaxis')}, "
+            f"legendgroup={t.get('legendgroup')}"
+        )
+    if len(traces) > len(trace_preview):
+        lines.append(f"  ... 另 {len(traces) - len(trace_preview)} 条 trace")
+    return "\n".join(lines)
 
 
 def _build_statistical_summary(sql_results: list) -> str:
@@ -68,6 +94,7 @@ def judge_node(state: GraphState) -> GraphState:
     question = state.get("question", "")
     sql_results = state.get("sql_results", [])
     chart_json = state.get("chart_json", "")
+    chart_meta = state.get("chart_meta", {})
     summary = state.get("summary", "")
     log = list(state.get("process_log") or [])
     log.append("🏅 [LLM-as-Judge] 正在评估输出质量...")
@@ -80,12 +107,16 @@ def judge_node(state: GraphState) -> GraphState:
         first_data_preview = str(rows)
 
     chart_type = "无图表"
-    if chart_json:
+    if chart_meta:
+        chart_type = chart_meta.get("chart_type", "已生成图表")
+    elif chart_json:
         try:
             fig_dict = json.loads(chart_json)
             chart_type = fig_dict.get("data", [{}])[0].get("type", "unknown")
         except Exception:
             chart_type = "已生成图表"
+
+    chart_meta_text = _format_chart_meta_for_judge(chart_meta)
 
     # 生成统计摘要
     stats_summary = _build_statistical_summary(sql_results)
@@ -97,6 +128,7 @@ def judge_node(state: GraphState) -> GraphState:
         f"数据预览（前3行）：{first_data_preview}\n\n"
         f"数据统计摘要：\n{stats_summary}\n\n"
         f"图表类型：{chart_type}\n\n"
+        f"真实图表元数据：\n{chart_meta_text}\n\n"
         f"分析结论：{summary}"
     )
 

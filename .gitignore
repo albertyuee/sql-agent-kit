@@ -36,9 +36,11 @@ ENV/
 *.swp
 *.swo
 
-# ===== Cursor / Claude =====
+# ===== Cursor / Claude / Codex / Agents =====
 .cursor/
 .claude/
+.codex/
+.agents/
 
 # ===== OpenSpec =====
 openspec/

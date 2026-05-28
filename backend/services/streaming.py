@@ -22,6 +22,7 @@ SSE 事件类型：
 import asyncio
 import json
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import AsyncGenerator
 
@@ -54,6 +55,29 @@ PIPELINE_TIMEOUT = 240
 # 核心函数
 # -----------------------------------------------------------------------------
 
+_STAGE_LABELS = {
+    "classifier": "意图识别",
+    "planner": "任务规划",
+    "sql": "SQL生成与执行",
+    "chart": "图表生成",
+    "summary": "结论生成",
+    "judge": "质量评分",
+}
+
+
+def _emit_stage(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
+                source: str, status: str, elapsed_ms: int | None = None):
+    payload = {
+        "type": "stage",
+        "source": source,
+        "status": status,
+        "label": _STAGE_LABELS.get(source, source),
+    }
+    if elapsed_ms is not None:
+        payload["elapsed_ms"] = elapsed_ms
+    asyncio.run_coroutine_threadsafe(queue.put(payload), loop)
+
+
 def _wrap_node(node_fn, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, source: str = ""):
     """
     包装 LangGraph 节点函数，实现流式日志输出和中间结果推送。
@@ -74,13 +98,24 @@ def _wrap_node(node_fn, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, s
         wrapped: 包装后的节点函数，接收并返回 GraphState
     """
     def wrapped(state: GraphState) -> GraphState:
+        stage_start = time.perf_counter()
+        _emit_stage(queue, loop, source, "running")
+
         # 记录执行前的快照
         prev_log_len = len(state.get("process_log") or [])
         prev_sql_results = state.get("sql_results") or []
         prev_chart_json = state.get("chart_json", "")
 
-        # 执行原始节点函数，获取更新后的状态
-        new_state = node_fn(state)
+        try:
+            # 执行原始节点函数，获取更新后的状态
+            new_state = node_fn(state)
+        except Exception:
+            elapsed_ms = int((time.perf_counter() - stage_start) * 1000)
+            _emit_stage(queue, loop, source, "error", elapsed_ms)
+            raise
+
+        elapsed_ms = int((time.perf_counter() - stage_start) * 1000)
+        _emit_stage(queue, loop, source, "done", elapsed_ms)
 
         # 1. 推送新增的日志条目（现有逻辑）
         new_log = new_state.get("process_log") or []
