@@ -107,6 +107,47 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 
 ---
 
+## 初始化示例数据库
+
+Agent 只认 `data/tables.yaml` 白名单里的 9 张表。如果你的库里还没有这些表，可以用仓库自带的脚本生成一份示例数据。
+
+### SQLite（无需安装数据库，最快跑通）
+
+```bash
+python scripts/init_db.py --dialect sqlite --out data/local.db
+```
+
+然后改 `.env`：
+
+```bash
+DB_TYPE=sqlite
+DB_SQLITE_PATH=./data/local.db
+```
+
+### MySQL
+
+```bash
+# 生成导入脚本
+python scripts/init_db.py --dialect mysql --out scripts/init_db.sql
+
+# 导入（脚本可重复执行，会先 DROP 再建）
+mysql -u root -p your_database < scripts/init_db.sql
+```
+
+仓库里已附了一份生成好的 `scripts/init_db.sql`，不想跑 Python 可以直接导入。
+
+### PostgreSQL
+
+脚本目前不生成 PG 方言。可以把 `scripts/init_db.sql` 里的反引号、`AUTO_INCREMENT`、`ENGINE=InnoDB ...` 尾部改掉后导入，或先用 SQLite 体验。
+
+### 示例数据包含什么
+
+9 张表约 3.5 万行：200 个用户、60 个商品、8 个分类、近 12 个月约 3000 笔订单及明细，另有广告投放、用户行为、商品评价、库存流水。
+
+数据以**运行当天**为基准往回推 12 个月，所以无论什么时候生成，趋势图都收在当前月；同一天内重复生成结果完全一致。几处刻意设计是为了让分析类图表有内容可看：订单带季节性波动、各分类销量不均、行为日志构成完整漏斗、库存流水与商品当前库存对得上。
+
+---
+
 ## 支持的平台
 
 **数据库：** MySQL · PostgreSQL · SQLite

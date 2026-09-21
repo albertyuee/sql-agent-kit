@@ -7,6 +7,9 @@ logs/queries.jsonl
 # ===== 用户数据（本地积累，不应提交）=====
 data/fewshot.json
 
+# ===== 示例数据库（由 scripts/init_db.py 生成，不应提交）=====
+data/*.db
+
 # ===== 前端构建产物（CI/CD 时生成）=====
 backend/static/
 

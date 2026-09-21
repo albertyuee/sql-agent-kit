@@ -44,9 +44,14 @@ class SchemaLoader:
             # 尝试获取外键信息，辅助模型理解表关系
             foreign_keys = []
             for fk in inspector.get_foreign_keys(table_name):
+                # constrained_columns / referred_columns 都是列表，
+                # 直接插值会渲染成 "['id']" 这种畸形文本进到 prompt 里
                 foreign_keys.append({
-                    "column": fk["constrained_columns"],
-                    "references": f"{fk['referred_table']}.{fk['referred_columns']}",
+                    "column": ", ".join(fk["constrained_columns"]),
+                    "references": (
+                        f"{fk['referred_table']}."
+                        f"{', '.join(fk['referred_columns'])}"
+                    ),
                 })
 
             result[table_name] = {
