@@ -100,7 +100,9 @@ mkdir -p logs data config
 # MySQL / PostgreSQL 一律不碰：init_db.sql 里有 DROP TABLE，
 # 自动对着用户已有的库跑是破坏性的，必须由人显式发起。
 info "检查数据库..."
-python scripts/init_db.py --dialect sqlite --auto
+if ! python scripts/init_db.py --dialect sqlite --auto; then
+    error "示例数据库初始化失败，已中止启动（原因见上方提示）"
+fi
 
 # ── 10. 启动后端 ────────────────────────────────
 PORT=${PORT:-8000}

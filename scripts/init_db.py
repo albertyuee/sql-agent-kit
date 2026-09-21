@@ -862,6 +862,24 @@ def resolve_env_value(key: str, default: str | None = None) -> str | None:
     return default
 
 
+def try_build_sqlite(path: str | Path) -> bool:
+    """建库；失败时打印人话提示并返回 False。
+
+    不把异常直接抛出去，是因为用户看到的是 PermissionError /
+    FileExistsError / "unable to open database file" 这种底层报错，
+    根本想不到要去改 .env 里的 DB_SQLITE_PATH。
+    """
+    try:
+        build_sqlite(path)
+    except (OSError, sqlite3.Error) as exc:
+        print(f"✗ 无法创建 SQLite 示例库：{path}")
+        print(f"  原因：{type(exc).__name__}: {exc}")
+        print("  请检查路径 —— .env 的 DB_SQLITE_PATH（或 --out）要写成")
+        print("  ./data/local.db 这样带文件名的可写路径，不能只写到目录。")
+        return False
+    return True
+
+
 def auto_init() -> int:
     """启动脚本用的入口：只在「确实是 sqlite 且库还不存在」时才动手。
 
@@ -879,12 +897,22 @@ def auto_init() -> int:
     db_path = Path(
         resolve_env_value("DB_SQLITE_PATH", DEFAULT_SQLITE_PATH) or DEFAULT_SQLITE_PATH
     )
-    if db_path.exists():
+    # 必须是 is_file()：目录也满足 exists()，会把「漏写文件名」当成
+    # 「库已就绪」，于是这里报成功、用户到第一次查询才撞上
+    # sqlalchemy 的 unable to open database file。
+    if db_path.is_file():
         print(f"SQLite 示例库已就绪：{db_path}")
         return 0
 
+    if db_path.exists():
+        print(f"✗ DB_SQLITE_PATH 指向了目录，不是数据库文件：{db_path}")
+        print("  请改成带文件名的路径，例如 ./data/local.db")
+        return 1
+
     print(f"未找到 SQLite 库，正在生成示例数据库 → {db_path}")
-    build_sqlite(db_path)
+    if not try_build_sqlite(db_path):
+        return 1
+
     total = sum(_row_counts(db_path).values())
     print(f"已生成 {len(SCHEMA)} 张表 / {total} 行数据")
     return 0
@@ -921,7 +949,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.dialect == "sqlite":
         out = args.out or resolve_env_value("DB_SQLITE_PATH", DEFAULT_SQLITE_PATH)
-        path = build_sqlite(out)
+        # 手动跑也给同样的友好报错，别一个入口说人话、另一个甩 traceback
+        if not try_build_sqlite(out):
+            return 1
+        path = Path(out)
         total = sum(_row_counts(path).values())
         print(f"已生成 SQLite 库：{path}")
         print(f"  共 {len(SCHEMA)} 张表 / {total} 行数据")

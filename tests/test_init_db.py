@@ -5,6 +5,7 @@
 """
 import contextlib
 import importlib.util
+import io
 import os
 import re
 import sqlite3
@@ -444,6 +445,15 @@ class AutoInitTests(unittest.TestCase):
         with chdir(self.root):
             return self.init_db.auto_init()
 
+    def auto_captured(self) -> tuple[int, str]:
+        """跑一次 auto_init，把 stdout / stderr 一起收下来 ——
+        失败时的提示是给人看的，得断言它到底说了什么。"""
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            with chdir(self.root):
+                code = self.init_db.auto_init()
+        return code, buf.getvalue()
+
     def test_creates_the_sqlite_database_when_missing(self):
         self.write_env("DB_TYPE=sqlite\nDB_SQLITE_PATH=./data/local.db\n")
 
@@ -488,6 +498,30 @@ class AutoInitTests(unittest.TestCase):
         self.auto()
 
         self.assertFalse((self.root / "data" / "local.db").exists())
+
+    def test_does_not_claim_success_when_the_path_is_a_directory(self):
+        """.env 里漏写文件名（DB_SQLITE_PATH=./data）时，exists() 对目录
+        也返回 True，脚本会谎报「已就绪」，用户直到第一次查询才撞上
+        sqlalchemy 的 unable to open database file，看不出是配错了路径。"""
+        (self.root / "data").mkdir()
+        self.write_env("DB_TYPE=sqlite\nDB_SQLITE_PATH=./data\n")
+
+        code, out = self.auto_captured()
+
+        self.assertNotEqual(code, 0, "把目录当成库文件了")
+        self.assertNotIn("已就绪", out)
+
+    def test_prints_a_readable_error_when_the_path_cannot_be_created(self):
+        """路径被普通文件挡住时，不该把 NotADirectoryError / PermissionError
+        的 traceback 直接甩给用户 —— 他看不出要去改 .env。"""
+        (self.root / "blocker").write_text("not a dir", encoding="utf-8")
+        self.write_env("DB_TYPE=sqlite\nDB_SQLITE_PATH=./blocker/local.db\n")
+
+        code, out = self.auto_captured()
+
+        self.assertEqual(code, 1)
+        self.assertNotIn("Traceback", out)
+        self.assertIn("DB_SQLITE_PATH", out)
 
 
 class DataRealismTests(unittest.TestCase):
