@@ -839,6 +839,57 @@ def build_sqlite(path: str | Path) -> Path:
     return path
 
 
+DEFAULT_SQLITE_PATH = "./data/local.db"
+
+
+def resolve_env_value(key: str, default: str | None = None) -> str | None:
+    """从 .env 读取一个配置项。
+
+    解析规则和 backend/routers/config.py 保持一致：跳过注释行，
+    并剥掉行内注释 —— 否则 `DB_TYPE=mysql  # mysql | postgresql`
+    会被整串当成类型名。
+    """
+    env_path = Path(".env")
+    if not env_path.exists():
+        return default
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key_part, _, value = line.partition("=")
+        if key_part.strip() == key:
+            return value.split("#")[0].strip() or default
+    return default
+
+
+def auto_init() -> int:
+    """启动脚本用的入口：只在「确实是 sqlite 且库还不存在」时才动手。
+
+    MySQL / PostgreSQL 一律不碰 —— scripts/init_db.sql 里有 DROP TABLE，
+    自动对着用户已有的库执行是破坏性的，必须由人显式发起。
+    """
+    db_type = (resolve_env_value("DB_TYPE", "mysql") or "mysql").lower()
+
+    if db_type != "sqlite":
+        print(f"数据库类型为 {db_type}，不自动创建示例库。")
+        print("  需要示例数据？见 README「初始化示例数据库」一节。")
+        print("  注意 scripts/init_db.sql 含 DROP TABLE，别对着有真实数据的库执行。")
+        return 0
+
+    db_path = Path(
+        resolve_env_value("DB_SQLITE_PATH", DEFAULT_SQLITE_PATH) or DEFAULT_SQLITE_PATH
+    )
+    if db_path.exists():
+        print(f"SQLite 示例库已就绪：{db_path}")
+        return 0
+
+    print(f"未找到 SQLite 库，正在生成示例数据库 → {db_path}")
+    build_sqlite(db_path)
+    total = sum(_row_counts(db_path).values())
+    print(f"已生成 {len(SCHEMA)} 张表 / {total} 行数据")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="初始化 sql-agent-kit 的示例数据库",
@@ -853,17 +904,30 @@ def main(argv: list[str] | None = None) -> int:
         "--dialect", choices=["sqlite", "mysql"], required=True,
         help="sqlite 直接建库文件；mysql 生成可导入的 .sql 脚本",
     )
-    parser.add_argument("--out", required=True, help="输出路径")
+    parser.add_argument(
+        "--out",
+        help="输出路径。sqlite 默认取 .env 的 DB_SQLITE_PATH，"
+             "mysql 默认写 scripts/init_db.sql",
+    )
+    parser.add_argument(
+        "--auto", action="store_true",
+        help="启动脚本模式：读 .env，仅在「是 sqlite 且库不存在」时生成，"
+             "MySQL/PostgreSQL 一律不碰",
+    )
     args = parser.parse_args(argv)
 
+    if args.auto:
+        return auto_init()
+
     if args.dialect == "sqlite":
-        path = build_sqlite(args.out)
+        out = args.out or resolve_env_value("DB_SQLITE_PATH", DEFAULT_SQLITE_PATH)
+        path = build_sqlite(out)
         total = sum(_row_counts(path).values())
         print(f"已生成 SQLite 库：{path}")
         print(f"  共 {len(SCHEMA)} 张表 / {total} 行数据")
         print("  把 .env 里的 DB_TYPE 设为 sqlite、DB_SQLITE_PATH 指向该文件即可")
     else:
-        path = build_mysql_sql(args.out)
+        path = build_mysql_sql(args.out or "scripts/init_db.sql")
         print(f"已生成 MySQL 导入脚本：{path}")
         print(f"  导入：mysql -u root -p your_database < {path}")
     return 0

@@ -69,9 +69,13 @@ https://github.com/user-attachments/assets/53503102-c8ab-4dd0-aa3b-38383ea60be2
 start.bat
 ```
 
-脚本自动完成环境检查 → 虚拟环境 → 依赖安装 → 前端构建 → 启动服务。
+脚本自动完成环境检查 → 虚拟环境 → 依赖安装 → 前端构建 → 准备数据库 → 启动服务。
 
 首次运行若 `.env` 不存在，会从 `.env.example` 复制一份并提示你填写配置。
+
+`.env.example` 默认用 SQLite，所以填好 LLM Key 再跑一次，脚本会自动建好示例库，不需要额外操作。
+用 MySQL / PostgreSQL 的话脚本不会碰你的库（`scripts/init_db.sql` 里有 `DROP TABLE`，自动执行太危险），
+按下面的「初始化示例数据库」手动导入即可。
 
 启动后访问 **http://localhost:8000**
 
@@ -113,16 +117,20 @@ Agent 只认 `data/tables.yaml` 白名单里的 9 张表。如果你的库里还
 
 ### SQLite（无需安装数据库，最快跑通）
 
-```bash
-python scripts/init_db.py --dialect sqlite --out data/local.db
-```
-
-然后改 `.env`：
+`.env` 里写：
 
 ```bash
 DB_TYPE=sqlite
 DB_SQLITE_PATH=./data/local.db
 ```
+
+然后跑一次脚本即可（`--out` 省略时自动取 `DB_SQLITE_PATH`）：
+
+```bash
+python scripts/init_db.py --dialect sqlite
+```
+
+其实用 `./start.sh` 的话这一步是自动的 —— 脚本发现 `.env` 是 sqlite 且库文件不存在，就会建好再启动。
 
 ### MySQL
 

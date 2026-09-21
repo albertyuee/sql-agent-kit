@@ -11,6 +11,7 @@ import yaml
 from dotenv import load_dotenv
 
 from .single.core import SQLAgent, QueryResult
+from ._config import load_settings
 from .llm import get_llm_client
 from .schema.loader import SchemaLoader
 from .schema.annotator import SchemaAnnotator
@@ -31,13 +32,12 @@ def build_agent(
     # 加载环境变量
     load_dotenv(env_file)
 
-    # 读取配置文件
-    settings_path = os.path.join(config_dir, "settings.yaml")
+    # 读取配置文件。
+    # settings 必须走 load_settings 而不是自己读 yaml，这样 .env 的
+    # LLM_PROVIDER 覆盖才会生效，也才能和多 Agent 节点读到同一份配置。
+    settings = load_settings(config_dir=config_dir, env_file=env_file)
     tables_path = os.path.join(data_dir, "tables.yaml")
     annotations_path = os.path.join(data_dir, "schema_annotations.yaml")
-
-    with open(settings_path, "r", encoding="utf-8") as f:
-        settings = yaml.safe_load(f)
 
     with open(tables_path, "r", encoding="utf-8") as f:
         tables_config = yaml.safe_load(f)

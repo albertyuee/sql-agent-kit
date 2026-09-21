@@ -3,7 +3,9 @@
 用标准库 unittest，不引入额外依赖。运行：
     python -m unittest discover -s tests -v
 """
+import contextlib
 import importlib.util
+import os
 import re
 import sqlite3
 import subprocess
@@ -412,6 +414,80 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         content = sql_path.read_text(encoding="utf-8")
         self.assertIn("CREATE TABLE `orders`", content)
+
+
+@contextlib.contextmanager
+def chdir(path):
+    previous = os.getcwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
+
+
+class AutoInitTests(unittest.TestCase):
+    """启动脚本只喊一句 `init_db.py --dialect sqlite --auto`，
+    由脚本自己读 .env 决定该不该动手 —— shell 和 batch 各写一遍
+    解析 .env 太容易出错（CRLF、行内注释、set -e）。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.init_db = load_init_db()
+
+    def write_env(self, content: str):
+        (self.root / ".env").write_text(content, encoding="utf-8")
+
+    def auto(self):
+        with chdir(self.root):
+            return self.init_db.auto_init()
+
+    def test_creates_the_sqlite_database_when_missing(self):
+        self.write_env("DB_TYPE=sqlite\nDB_SQLITE_PATH=./data/local.db\n")
+
+        code = self.auto()
+
+        self.assertEqual(code, 0)
+        self.assertTrue((self.root / "data" / "local.db").exists())
+
+    def test_ignores_inline_comments_and_surrounding_space(self):
+        self.write_env("DB_TYPE=sqlite        # mysql | postgresql | sqlite\n"
+                       "  DB_SQLITE_PATH = ./data/app.db  \n")
+
+        self.auto()
+
+        self.assertTrue((self.root / "data" / "app.db").exists())
+
+    def test_does_not_touch_a_non_sqlite_database(self):
+        """MySQL 的脚本里有 DROP TABLE，绝不能自动往别人的库上跑。"""
+        self.write_env("DB_TYPE=mysql\nDB_HOST=127.0.0.1\n")
+
+        code = self.auto()
+
+        self.assertEqual(code, 0)
+        self.assertFalse((self.root / "data").exists(),
+                         "非 sqlite 时不该生成任何东西")
+
+    def test_is_idempotent_and_leaves_an_existing_database_alone(self):
+        self.write_env("DB_TYPE=sqlite\nDB_SQLITE_PATH=./data/local.db\n")
+        self.auto()
+        db = self.root / "data" / "local.db"
+        before = db.read_bytes()
+
+        self.auto()
+
+        self.assertEqual(db.read_bytes(), before, "已存在的库被覆盖了")
+
+    def test_defaults_to_sqlite_when_db_type_is_absent(self):
+        """.env 里没写 DB_TYPE 时 create_db_engine 会按 mysql 处理，
+        启动脚本不该擅自建库。"""
+        self.write_env("SILICONFLOW_API_KEY=sk-test\n")
+
+        self.auto()
+
+        self.assertFalse((self.root / "data" / "local.db").exists())
 
 
 class DataRealismTests(unittest.TestCase):

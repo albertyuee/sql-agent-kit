@@ -24,7 +24,17 @@ def load_settings(config_dir: str = "./config", env_file: str = ".env") -> dict:
 
     settings_path = os.path.join(config_dir, "settings.yaml")
     with open(settings_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        settings = yaml.safe_load(f)
+
+    # .env 的 LLM_PROVIDER 覆盖 settings.yaml。
+    # 配置页把 provider 写进 .env，而这里原本只认 settings.yaml，
+    # 导致在界面上切换 provider 不生效。统一在这里覆盖，
+    # SQL Agent 和 planner/judge/summary/chart 才会读到同一个 provider。
+    provider = os.environ.get("LLM_PROVIDER")
+    if provider and isinstance(settings.get("llm"), dict):
+        settings["llm"]["provider"] = provider
+
+    return settings
 
 
 def load_table_names(data_dir: str = "./data") -> list:

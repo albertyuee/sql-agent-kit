@@ -86,7 +86,18 @@ if not exist "logs\" mkdir logs
 if not exist "data\" mkdir data
 if not exist "config\" mkdir config
 
-:: ── 9. 启动后端 ─────────────────────────────────
+:: ── 9. 准备数据库 ───────────────────────────────
+:: 只在「.env 里是 sqlite 且库文件还不存在」时建示例库。
+:: MySQL / PostgreSQL 一律不碰：init_db.sql 里有 DROP TABLE，
+:: 自动对着用户已有的库跑是破坏性的，必须由人显式发起。
+echo [INFO]  检查数据库...
+python scripts\init_db.py --dialect sqlite --auto
+if errorlevel 1 (
+    echo [ERROR] 示例数据库初始化失败
+    pause & exit /b 1
+)
+
+:: ── 10. 启动后端 ────────────────────────────────
 if "%PORT%"=="" set PORT=8000
 
 echo.

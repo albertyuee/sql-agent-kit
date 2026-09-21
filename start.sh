@@ -95,8 +95,15 @@ cd ..
 # ── 8. 创建必要目录 ─────────────────────────────
 mkdir -p logs data config
 
-# ── 9. 启动后端 ─────────────────────────────────
-PORT=${PORT:-8432}
+# ── 9. 准备数据库 ───────────────────────────────
+# 只在「.env 里是 sqlite 且库文件还不存在」时建示例库。
+# MySQL / PostgreSQL 一律不碰：init_db.sql 里有 DROP TABLE，
+# 自动对着用户已有的库跑是破坏性的，必须由人显式发起。
+info "检查数据库..."
+python scripts/init_db.py --dialect sqlite --auto
+
+# ── 10. 启动后端 ────────────────────────────────
+PORT=${PORT:-8000}
 echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${GREEN}  启动成功！访问地址：http://localhost:${PORT}${NC}"
