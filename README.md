@@ -220,30 +220,43 @@ mysql -u root -p your_database < scripts/init_db.sql
 `.env` 环境变量：
 
 ```env
-# LLM Provider（选一个即可）
+# 用哪个 LLM Provider（选一个即可）
+# 这一项会覆盖 config/settings.yaml 的 llm.provider；
+# 界面「配置管理」页改的就是这里。
 LLM_PROVIDER=siliconflow          # openai | qwen | siliconflow | bailian
 
 # SiliconFlow（推荐，性价比高）
 SILICONFLOW_API_KEY=sk-xxx
-SILICONFLOW_MODEL=Pro/zai-org/GLM-5.1
+SILICONFLOW_MODEL=Qwen/Qwen2.5-72B-Instruct
 
-# OpenAI
+# OpenAI / 任何 OpenAI 兼容接口（Ollama、vLLM 等）
 OPENAI_API_KEY=sk-xxx
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-4o
 
-# 数据库
-DB_TYPE=mysql                     # mysql | postgresql | sqlite
-DB_HOST=127.0.0.1
-DB_PORT=3306
-DB_USER=root
-DB_PASSWORD=your_password
-DB_NAME=your_database
+# 通义千问（阿里云 DashScope）
+DASHSCOPE_API_KEY=sk-xxx
+QWEN_MODEL=qwen-plus
 
-# Agent 参数
-MAX_RETRY=3
-CONFIDENCE_THRESHOLD=0.6
+# 阿里云百炼
+BAILIAN_API_KEY=sk-xxx
+BAILIAN_MODEL=qwen-plus
+
+# 数据库：默认 SQLite，不需要装任何数据库
+DB_TYPE=sqlite                    # mysql | postgresql | sqlite
+DB_SQLITE_PATH=./data/local.db
+
+# 用 MySQL 就注释掉上面两行，改成这几项
+# DB_TYPE=mysql
+# DB_HOST=127.0.0.1
+# DB_PORT=3306
+# DB_USER=root
+# DB_PASSWORD=your_password
+# DB_NAME=your_database
 ```
+
+重试次数、置信度阈值、查询超时、返回行数上限这些 **Agent 行为参数不走 `.env`**，
+在 `config/settings.yaml` 的 `agent` / `executor` 段里配置，也可以在界面「Agent 参数」页直接改。
 
 `data/tables.yaml` — 白名单表，`data/schema_annotations.yaml` — 字段语义注释，均可在 Web UI 中直接编辑。
 
